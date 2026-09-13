@@ -10,6 +10,20 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
+const HISTORY_PATH = path.join(__dirname, 'history.json');
+
+const readLocalHistory = () => {
+  try {
+    return JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
+  } catch (error) {
+    return [];
+  }
+};
+
+const saveLocalHistory = (entry) => {
+  const history = [entry, ...readLocalHistory()].slice(0, 50);
+  fs.writeFileSync(HISTORY_PATH, JSON.stringify(history));
+};
 
 // Middleware
 app.use(cors());
@@ -47,12 +61,13 @@ const upload = multer({
 });
 
 // MongoDB connection
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => console.error('❌ MongoDB connection error:', err));
+if (process.env.MONGODB_URI) {
+  mongoose.connect(process.env.MONGODB_URI)
+    .then(() => console.log('✅ MongoDB connected'))
+    .catch(err => console.error('❌ MongoDB connection error:', err.message));
+} else {
+  console.log('ℹ️ MongoDB not configured; processing works without history.');
+}
 
 // Image Schema
 const imageSchema = new mongoose.Schema({
@@ -86,12 +101,11 @@ app.post('/api/process-image', upload.single('image'), async (req, res) => {
     }
 
     // Create database entry
-    const imageRecord = new Image({
+    const imageRecord = mongoose.connection.readyState === 1 ? await Image.create({
       originalFilename: req.file.originalname,
       originalPath: req.file.path,
       status: 'processing'
-    });
-    await imageRecord.save();
+    }) : null;
 
     // Read file and send to FastAPI
     const fileStream = fs.createReadStream(req.file.path);
@@ -116,27 +130,43 @@ app.post('/api/process-image', upload.single('image'), async (req, res) => {
       console.log('FastAPI response received');
 
       // Update database record
-      imageRecord.status = 'completed';
-      imageRecord.result = {
-        originalImage: response.data.original_image,
-        derainedImage: response.data.derained_image
-      };
-      await imageRecord.save();
+      if (imageRecord) {
+        imageRecord.status = 'completed';
+        imageRecord.result = {
+          originalImage: response.data.original_image,
+          derainedImage: response.data.derained_image
+        };
+        await imageRecord.save();
+      } else {
+        saveLocalHistory({
+          _id: `${Date.now()}`,
+          originalFilename: req.file.originalname,
+          processedAt: new Date().toISOString(),
+          status: 'completed',
+          result: {
+            originalImage: response.data.original_image,
+            derainedImage: response.data.derained_image
+          }
+        });
+      }
 
       // Clean up uploaded file
       fs.unlinkSync(req.file.path);
 
       res.json({
         success: true,
-        id: imageRecord._id,
+        id: imageRecord?._id,
         originalImage: response.data.original_image,
         derainedImage: response.data.derained_image,
+        processingMode: response.data.processing_mode,
         message: 'Image processed successfully'
       });
 
     } catch (error) {
-      imageRecord.status = 'failed';
-      await imageRecord.save();
+      if (imageRecord) {
+        imageRecord.status = 'failed';
+        await imageRecord.save();
+      }
 
       // Clean up uploaded file
       if (fs.existsSync(req.file.path)) {
@@ -169,6 +199,9 @@ app.post('/api/process-image', upload.single('image'), async (req, res) => {
 // Get processing history
 app.get('/api/history', async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.json({ success: true, images: readLocalHistory(), historyAvailable: true });
+    }
     const images = await Image.find()
       .sort({ processedAt: -1 })
       .limit(50)

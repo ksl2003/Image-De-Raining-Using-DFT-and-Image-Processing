@@ -2,13 +2,22 @@
 Model utilities for image de-raining
 Extracted from the original training code
 """
-import tensorflow as tf
-from tensorflow.keras import layers, models
 import numpy as np
 import cv2
 
+tf = layers = models = None
+
+def _load_tensorflow():
+    """Load TensorFlow only if a neural utility is explicitly requested."""
+    global tf, layers, models
+    if tf is None:
+        import tensorflow as tensorflow_module
+        from tensorflow.keras import layers as keras_layers, models as keras_models
+        tf, layers, models = tensorflow_module, keras_layers, keras_models
+
 def to_frequency_domain(img_tensor, mode='real_imag'):
     """Convert image to frequency domain using FFT"""
+    _load_tensorflow()
     img_tensor = tf.cast(img_tensor, tf.complex64)
     fft = tf.signal.fft2d(tf.transpose(img_tensor, perm=[2, 0, 1]))
     real = tf.math.real(fft)
@@ -24,6 +33,7 @@ def to_frequency_domain(img_tensor, mode='real_imag'):
 
 def from_frequency_domain(freq_tensor):
     """Convert from frequency domain back to image using IFFT"""
+    _load_tensorflow()
     h, w, c, _ = freq_tensor.shape
     freq_tensor = tf.transpose(freq_tensor, perm=[2, 0, 1, 3])
     real = freq_tensor[..., 0]
@@ -36,6 +46,7 @@ def from_frequency_domain(freq_tensor):
 
 def build_dnet(input_shape=(256, 256, 6)):
     """Build D-Net architecture"""
+    _load_tensorflow()
     inputs = tf.keras.Input(shape=input_shape)
     x = layers.Conv2D(64, 3, padding='same', activation='relu')(inputs)
     x = layers.Conv2D(128, 3, padding='same', activation='relu')(x)
@@ -44,6 +55,7 @@ def build_dnet(input_shape=(256, 256, 6)):
 
 def build_nnet(input_shape=(256, 256, 256)):
     """Build N-Net architecture"""
+    _load_tensorflow()
     inputs = tf.keras.Input(shape=input_shape)
     x = layers.Conv2D(128, 3, padding='same', activation='relu')(inputs)
     x = layers.Conv2D(64, 3, padding='same', activation='relu')(x)
@@ -52,6 +64,7 @@ def build_nnet(input_shape=(256, 256, 256)):
 
 def build_derain_model():
     """Build the complete de-raining model"""
+    _load_tensorflow()
     input_freq = tf.keras.Input(shape=(256, 256, 6))
     dnet = build_dnet()
     nnet = build_nnet()
@@ -67,6 +80,36 @@ def sharpen_image(img):
     img_uint8 = np.uint8(np.clip(img * 255, 0, 255))
     sharp = cv2.filter2D(img_uint8, -1, kernel)
     return np.clip(sharp / 255.0, 0, 1)
+
+def remove_rain_fallback(img):
+    """Remove near-vertical rain frequencies and sharpen the result."""
+    img_uint8 = np.uint8(np.clip(img * 255, 0, 255))
+    yuv = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2YUV)
+    luminance = yuv[..., 0].astype(np.float32) / 255.0
+
+    # A vertical streak produces energy mainly across the horizontal frequency
+    # axis. Smoothly attenuate that directional high-frequency energy while
+    # leaving the low-frequency scene structure and colour channels intact.
+    height, width = luminance.shape
+    fy = np.fft.fftshift(np.fft.fftfreq(height))[:, None]
+    fx = np.fft.fftshift(np.fft.fftfreq(width))[None, :]
+    radius = np.sqrt(fx * fx + fy * fy)
+    directional_band = np.exp(-((fy / (0.035 + 0.35 * np.abs(fx))) ** 2))
+    high_frequency = 1.0 - np.exp(-((radius / 0.03) ** 2))
+    dft_filter = 1.0 - (0.96 * directional_band * high_frequency)
+
+    spectrum = np.fft.fftshift(np.fft.fft2(luminance))
+    clean_luminance = np.real(np.fft.ifft2(np.fft.ifftshift(spectrum * dft_filter)))
+    clean_luminance = np.clip(clean_luminance, 0.0, 1.0)
+
+    yuv[..., 0] = np.uint8(clean_luminance * 255.0)
+    derained = cv2.cvtColor(yuv, cv2.COLOR_YUV2RGB)
+    derained = cv2.bilateralFilter(derained, 7, 35, 35)
+
+    # Strong unsharp mask restores edges softened by frequency attenuation.
+    blurred = cv2.GaussianBlur(derained, (0, 0), 1.1)
+    derained = cv2.addWeighted(derained, 1.65, blurred, -0.65, 0)
+    return np.clip(derained / 255.0, 0, 1)
 
 def enhance_output_image(img):
     """Enhance output image using CLAHE"""

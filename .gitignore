@@ -32,11 +32,13 @@ client/.env.production.local
 
 # Uploads
 server/uploads/
+server/history.json
 *.jpg
 *.jpeg
 *.png
 *.gif
 *.webp
+backend/api/model_weights.h5
 
 # IDE
 .vscode/

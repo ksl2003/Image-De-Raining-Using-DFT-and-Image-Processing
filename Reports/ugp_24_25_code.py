@@ -20,11 +20,13 @@ import tensorflow as tf
 from tensorflow.keras import layers, models
 import kagglehub
 
-# Download Rain Dataset
-kaggle_dataset_path = kagglehub.dataset_download("bshaurya/rain-dataset")
-print("✅ Dataset downloaded at:", kaggle_dataset_path)
+# Download Rain Dataset, unless an already downloaded local copy is supplied.
+kaggle_dataset_path = os.getenv("RAIN_DATASET_PATH") or kagglehub.dataset_download("bshaurya/rain-dataset")
+print("Dataset available at:", kaggle_dataset_path)
 
 AUTOTUNE = tf.data.AUTOTUNE
+TRAIN_IMAGE_SIZE = int(os.getenv("TRAIN_IMAGE_SIZE", "256"))
+TRAIN_BATCH_SIZE = int(os.getenv("TRAIN_BATCH_SIZE", "8"))
 print("Using TensorFlow version:", tf.__version__)
 
 # ==============================================================
@@ -107,15 +109,15 @@ def build_nnet(input_shape=(256, 256, 256)):
     x = layers.Conv2D(3, 3, padding='same', activation='sigmoid')(x)
     return models.Model(inputs, x, name='NNet')
 
-def build_derain_model():
-    input_freq = tf.keras.Input(shape=(256, 256, 6))
-    dnet = build_dnet()
-    nnet = build_nnet()
+def build_derain_model(input_shape=(256, 256, 6)):
+    input_freq = tf.keras.Input(shape=input_shape)
+    dnet = build_dnet(input_shape)
+    nnet = build_nnet((input_shape[0], input_shape[1], 256))
     features = dnet(input_freq)
     rain_map = nnet(features)
     return models.Model(inputs=input_freq, outputs=rain_map, name='DerainModel')
 
-model = build_derain_model()
+model = build_derain_model((TRAIN_IMAGE_SIZE, TRAIN_IMAGE_SIZE, 6))
 model.summary()
 
 # ==============================================================
@@ -150,8 +152,20 @@ def train_model(dataset, epochs=5):
         else:
             print(f"Epoch {epoch + 1}, No batches processed")
 
-train_dataset = build_rain100_dataset(kaggle_dataset_path, batch_size=8)
+train_dataset = build_rain100_dataset(
+    kaggle_dataset_path,
+    batch_size=TRAIN_BATCH_SIZE,
+    img_size=(TRAIN_IMAGE_SIZE, TRAIN_IMAGE_SIZE),
+)
 train_model(train_dataset, epochs=5)
+
+# Export the trained checkpoint used by the application.
+# Run this script from the repository root so the relative path resolves to
+# backend/api/model_weights.h5.
+weights_path = os.path.join("backend", "api", "model_weights.h5")
+os.makedirs(os.path.dirname(weights_path), exist_ok=True)
+model.save_weights(weights_path)
+print("Saved model weights to:", os.path.abspath(weights_path))
 
 # ==============================================================
 # 6. Inference & Enhancement
@@ -184,17 +198,17 @@ def sharpen_image(img):
     return np.clip(sharp / 255.0, 0, 1)
 
 def derain_image(rainy_path):
-    rainy = Image.open(rainy_path).convert('RGB').resize((256, 256))
+    rainy = Image.open(rainy_path).convert('RGB').resize((TRAIN_IMAGE_SIZE, TRAIN_IMAGE_SIZE))
     rainy_np = np.array(rainy) / 255.0
     rainy_tf = tf.convert_to_tensor(rainy_np, dtype=tf.float32)
 
     # Frequency domain conversion
     x_freq = to_frequency_domain(rainy_tf, mode='real_imag')
     x_freq = tf.transpose(x_freq, perm=[1, 2, 0, 3])
-    x_freq = tf.reshape(x_freq, [1, 256, 256, 6])
+    x_freq = tf.reshape(x_freq, [1, TRAIN_IMAGE_SIZE, TRAIN_IMAGE_SIZE, 6])
 
     rain_map = model(x_freq, training=False)[0]
-    freq_reshaped = tf.reshape(x_freq[0], [256, 256, 3, 2])
+    freq_reshaped = tf.reshape(x_freq[0], [TRAIN_IMAGE_SIZE, TRAIN_IMAGE_SIZE, 3, 2])
     rainy_reconstructed = from_frequency_domain(freq_reshaped)
 
     clean_pred = tf.clip_by_value(rainy_reconstructed - rain_map, 0.0, 1.0)

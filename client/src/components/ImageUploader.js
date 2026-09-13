@@ -12,12 +12,16 @@ const ImageUploader = ({ onImageProcessed, onError, onLoading, loading }) => {
     if (file) {
       // Validate file type
       if (!file.type.startsWith('image/')) {
+        setSelectedFile(null);
+        setPreview(null);
         onError('Please select a valid image file');
         return;
       }
 
       // Validate file size (10MB)
       if (file.size > 10 * 1024 * 1024) {
+        setSelectedFile(null);
+        setPreview(null);
         onError('File size must be less than 10MB');
         return;
       }
@@ -56,6 +60,7 @@ const ImageUploader = ({ onImageProcessed, onError, onLoading, loading }) => {
         onImageProcessed({
           original: response.data.originalImage,
           derained: response.data.derainedImage,
+          processingMode: response.data.processingMode,
         });
       } else {
         onError(response.data.error || 'Failed to process image');
@@ -86,7 +91,7 @@ const ImageUploader = ({ onImageProcessed, onError, onLoading, loading }) => {
         <div className="file-input-wrapper">
           <input
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg,image/webp"
             onChange={handleFileSelect}
             ref={fileInputRef}
             className="file-input"
@@ -96,6 +101,7 @@ const ImageUploader = ({ onImageProcessed, onError, onLoading, loading }) => {
           <label htmlFor="file-input" className="file-input-label">
             {preview ? 'Change Image' : 'Choose Image'}
           </label>
+          {!preview && <p className="upload-hint">PNG, JPG or WEBP · Up to 10 MB</p>}
         </div>
 
         {preview && (
@@ -117,11 +123,11 @@ const ImageUploader = ({ onImageProcessed, onError, onLoading, loading }) => {
               >
                 {loading ? (
                   <>
-                    <span className="spinner"></span>
+                    <span className="spinner" aria-hidden="true"></span>
                     Processing...
                   </>
                 ) : (
-                  '🚀 Process Image'
+                  'Process Image'
                 )}
               </button>
               <button

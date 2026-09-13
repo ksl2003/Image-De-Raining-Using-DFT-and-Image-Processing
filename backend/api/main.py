@@ -3,11 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import numpy as np
 from PIL import Image
-import tensorflow as tf
-import cv2
 import io
 import base64
-from model_utils import build_derain_model, to_frequency_domain, from_frequency_domain, sharpen_image, blend_luminance_with_original_colors
+from model_utils import remove_rain_fallback
 import os
 
 app = FastAPI(title="Image De-raining API")
@@ -21,29 +19,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global model variable
-model = None
-
-def load_model():
-    """Load the de-raining model"""
-    global model
-    if model is None:
-        model = build_derain_model()
-        # Try to load weights if they exist
-        weights_path = "model_weights.h5"
-        if os.path.exists(weights_path):
-            model.load_weights(weights_path)
-            print("✅ Model weights loaded")
-        else:
-            print("⚠️ No weights file found. Using untrained model.")
-    return model
-
 @app.on_event("startup")
 async def startup_event():
-    """Initialize model on startup"""
-    print("🚀 Starting FastAPI server initialization...")
-    load_model()
-    print("✅ FastAPI server started and model loaded successfully")
+    print("FastAPI DFT de-raining server started successfully")
 
 @app.get("/")
 async def root():
@@ -52,8 +30,11 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    print(f"GET /health request received. Model loaded: {model is not None}")
-    return {"status": "healthy", "model_loaded": model is not None}
+    return {
+        "status": "healthy",
+        "model_loaded": False,
+        "processing_mode": "dft"
+    }
 
 @app.post("/api/derain")
 async def derain_image(file: UploadFile = File(...)):
@@ -62,37 +43,15 @@ async def derain_image(file: UploadFile = File(...)):
     """
     try:
         # Validate file type
-        if not file.content_type.startswith('image/'):
+        if not file.content_type or not file.content_type.startswith('image/'):
             raise HTTPException(status_code=400, detail="File must be an image")
         
         # Read image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert('RGB')
-        
-        # Resize to 256x256
-        image = image.resize((256, 256))
-        rainy_np = np.array(image) / 255.0
-        rainy_tf = tf.convert_to_tensor(rainy_np, dtype=tf.float32)
-        
-        # Get model
-        model = load_model()
-        
-        # Frequency domain conversion
-        x_freq = to_frequency_domain(rainy_tf, mode='real_imag')
-        x_freq = tf.transpose(x_freq, perm=[1, 2, 0, 3])
-        x_freq = tf.reshape(x_freq, [1, 256, 256, 6])
-        
-        # Model prediction
-        rain_map = model(x_freq, training=False)[0]
-        freq_reshaped = tf.reshape(x_freq[0], [256, 256, 3, 2])
-        rainy_reconstructed = from_frequency_domain(freq_reshaped)
-        
-        # Generate clean image
-        clean_pred = tf.clip_by_value(rainy_reconstructed - rain_map, 0.0, 1.0)
-        clean_pred = sharpen_image(clean_pred.numpy())
-        
-        # Preserve original colors and adjust brightness
-        clean_pred = blend_luminance_with_original_colors(rainy_np, clean_pred)
+        rainy_np = np.array(image, dtype=np.float32) / 255.0
+        clean_pred = remove_rain_fallback(rainy_np)
+        processing_mode = "dft"
         
         # Convert to PIL Image
         clean_img = (clean_pred * 255).astype(np.uint8)
@@ -112,9 +71,11 @@ async def derain_image(file: UploadFile = File(...)):
             "success": True,
             "original_image": f"data:image/png;base64,{orig_base64}",
             "derained_image": f"data:image/png;base64,{img_base64}",
+            "processing_mode": processing_mode,
             "message": "Image processed successfully"
         })
-        
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error processing image: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")

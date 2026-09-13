@@ -13,42 +13,23 @@ const ImageDisplay = ({ images }) => {
 
   return (
     <div className="image-display">
-      <h2 className="display-title">✨ Processing Results</h2>
+      <h2 className="display-title">Processing results</h2>
+      {images?.processingMode === 'dft' && (
+        <p className="processing-note">Processed with directional DFT rain filtering and edge sharpening.</p>
+      )}
       <div className="images-container">
         <div className="image-card">
-          <h3 className="image-card-title">Original (Rainy)</h3>
+          <h3 className="image-card-title">Original</h3>
           <div className="image-wrapper">
-            <img 
-              src={images.original} 
-              alt="Original rainy image" 
-              className="result-image"
-            />
+            {images ? <img src={images.original} alt="Original rainy scene" className="result-image" /> : <p>Original image preview</p>}
           </div>
-          <button
-            onClick={() => handleDownload(images.original, 'original-rainy.png')}
-            className="download-btn"
-          >
-            📥 Download Original
-          </button>
         </div>
-
-        <div className="arrow">→</div>
-
         <div className="image-card">
           <h3 className="image-card-title">De-rained Result</h3>
           <div className="image-wrapper">
-            <img 
-              src={images.derained} 
-              alt="De-rained image" 
-              className="result-image"
-            />
+            {images ? <img src={images.derained} alt="Processed scene with reduced rain" className="result-image" /> : <p>Processed image preview</p>}
           </div>
-          <button
-            onClick={() => handleDownload(images.derained, 'derained-result.png')}
-            className="download-btn"
-          >
-            📥 Download Result
-          </button>
+          {images && <button onClick={() => handleDownload(images.derained, 'derained-result.png')} className="download-btn">Download Result</button>}
         </div>
       </div>
     </div>

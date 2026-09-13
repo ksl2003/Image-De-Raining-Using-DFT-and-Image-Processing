@@ -55,7 +55,7 @@ const History = () => {
 
   return (
     <div className="history-container">
-      <h2>📜 Processing History</h2>
+      <h2>Processing History</h2>
       {history.length === 0 ? (
         <div className="no-history">
           <p>No processing history yet. Upload an image to get started!</p>
@@ -103,7 +103,7 @@ const History = () => {
                       }
                       className="history-download-btn"
                     >
-                      📥 Download Result
+                      Download Result
                     </button>
                   </div>
                 </div>
