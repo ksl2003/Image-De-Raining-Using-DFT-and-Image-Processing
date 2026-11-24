@@ -62,5 +62,4 @@ Reports/           Project report and original research code
 ## Notes
 
 - Supported uploads are PNG, JPEG, and WebP up to 10 MB.
-- The application is DFT-based and does not require model weights or TensorFlow.
 - The `start-*.bat` files are optional Windows launch helpers.
